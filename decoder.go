@@ -59,9 +59,9 @@ func (d *Decoder) RegisterConverter(value interface{}, converterFunc Converter) 
 	d.cache.registerConverter(value, converterFunc)
 }
 
-// Decode decodes a map[string][]string to a struct.
+// Decode decodes a map[string][]string to a struct or a map.
 //
-// The first parameter must be a pointer to a struct.
+// The first parameter must be either a pointer to a struct or a map.
 //
 // The second parameter is a map, typically url.Values from an HTTP request.
 // Keys are "paths" in dotted notation to the struct fields and nested structs.
@@ -69,25 +69,37 @@ func (d *Decoder) RegisterConverter(value interface{}, converterFunc Converter) 
 // See the package documentation for a full explanation of the mechanics.
 func (d *Decoder) Decode(dst interface{}, src map[string][]string) error {
 	v := reflect.ValueOf(dst)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
-		return errors.New("schema: interface must be a pointer to struct")
+	if (v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct) && v.Kind() != reflect.Map {
+		return errors.New("schema: interface must be either a pointer to struct or a map")
 	}
-	v = v.Elem()
-	t := v.Type()
 	errors := MultiError{}
-	for path, values := range src {
-		if parts, err := d.cache.parsePath(path, t); err == nil {
-			if err = d.decode(v, path, parts, values); err != nil {
-				errors[path] = err
+	if v.Kind() == reflect.Map {
+		for key, values := range src {
+			if err := d.decodeToMap(v, key, values); err != nil {
+				errors[key] = err
 			}
-		} else if !d.ignoreUnknownKeys {
-			errors[path] = fmt.Errorf("schema: invalid path %q", path)
 		}
+		if len(errors) > 0 {
+			return errors
+		}
+		return nil
+	} else {
+		v = v.Elem()
+		t := v.Type()
+		for path, values := range src {
+			if parts, err := d.cache.parsePath(path, t); err == nil {
+				if err = d.decode(v, path, parts, values); err != nil {
+					errors[path] = err
+				}
+			} else if !d.ignoreUnknownKeys {
+				errors[path] = fmt.Errorf("schema: invalid path %q", path)
+			}
+		}
+		if len(errors) > 0 {
+			return errors
+		}
+		return d.checkRequired(t, src, "")
 	}
-	if len(errors) > 0 {
-		return errors
-	}
-	return d.checkRequired(t, src, "")
 }
 
 // checkRequired checks whether required fields are empty
@@ -139,6 +151,23 @@ func isEmpty(t reflect.Type, value []string) bool {
 		return len(value[0]) == 0
 	}
 	return false
+}
+
+func (d *Decoder) decodeToMap(v reflect.Value, key string, values []string) error {
+	kt := v.Type().Key()
+	vt := v.Type().Elem()
+
+	conv := d.cache.converter(vt)
+	if conv == nil && (v.Kind() == reflect.Ptr || v.Kind() == reflect.Struct) {
+		return errors.New("does not support embedded struct and map")
+	}
+
+	if conv == nil {
+		v.SetMapIndex(builtinConverters[kt.Kind()](key), (builtinConverters[vt.Kind()])(values[0]))
+	} else {
+		v.SetMapIndex(builtinConverters[kt.Kind()](key), conv(values[0]))
+	}
+	return nil
 }
 
 // decode fills a struct field using a parsed path.

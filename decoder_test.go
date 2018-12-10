@@ -1767,3 +1767,28 @@ func TestTextUnmarshalerEmpty(t *testing.T) {
 		t.Errorf("Expected %v errors, got %v", expected, s.Value)
 	}
 }
+
+func TestDecodeToMap(t *testing.T) {
+	m := make(map[int64]float64)
+	data := map[string][]string{
+		"1": []string{"100"}, // empty value
+	}
+	decoder := NewDecoder()
+	if err := decoder.Decode(m, data); err != nil {
+		t.Fatal("Error while decoding:", err)
+	}
+	if m[1] != float64(100) {
+		t.Errorf("Expected %v, got: %v", float64(100), m[1])
+	}
+
+	type MyTime time.Time
+	var myTime MyTime
+	s1 := make(map[string]MyTime)
+	ts := time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
+	decoder.RegisterConverter(myTime, func(s string) reflect.Value { return reflect.ValueOf(MyTime(ts)) })
+	v1 := map[string][]string{"last time": {"4"}, "next time": {"5"}}
+	decoder.Decode(s1, v1)
+	if ok := time.Time(s1["last time"]).Equal(ts); !ok {
+		t.Errorf("Expected %v, got %v", ts, s1["last time"])
+	}
+}
